@@ -124,13 +124,91 @@ class LinuxDoBrowser:
     def __init__(self) -> None:
         logging.info("启动 Playwright...")
         self.pw = sync_playwright().start()
-        logging.info("以无头模式启动 Firefox...")
-        self.browser = self.pw.firefox.launch(headless=True)
-        self.context = self.browser.new_context()
-        self.page = self.context.new_page()
-        logging.info(f"导航到 {HOME_URL}...")
-        self.page.goto(HOME_URL)
+        logging.info("以有头模式启动 Chromium...")
+        
+        # Chromium 的启动参数
+        browser_args = [
+            "--start-maximized",
+            "--disable-blink-features=AutomationControlled",
+            "--disable-infobars",
+            "--window-size=1920,1080",
+            "--no-sandbox",
+            "--disable-gpu",
+        ]
+
+        try:
+            # 使用 Playwright 内置的 Chromium
+            self.browser = self.pw.chromium.launch(
+                headless=True,  # 显示浏览器窗口
+                args=browser_args,
+                timeout=30000,
+                ignore_default_args=["--enable-automation"]
+            )
+            
+            self.context = self.browser.new_context(
+                viewport={"width": 1920, "height": 1080},
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                ignore_https_errors=True,
+            )
+            
+            self.page = self.context.new_page()
+            
+            # 设置较短的超时时间
+            self.page.set_default_timeout(30000)
+            self.page.set_default_navigation_timeout(30000)
+            
+            logging.info(f"导航到 {HOME_URL}...")
+            
+            # 访问页面
+            self.page.goto(
+                HOME_URL,
+                timeout=30000,
+                wait_until="domcontentloaded"
+            )
+            logging.info("页面开始加载...")
+            
+            # 等待页面主要内容
+            try:
+                self.page.wait_for_selector("#main-outlet", timeout=10000)
+                logging.info("主要内容区域加载完成")
+            except TimeoutError:
+                logging.warning("等待主要内容超时，尝试继续执行...")
+            
+            # 检查页面状态
+            is_loaded = self.page.evaluate("""() => {
+                return {
+                    readyState: document.readyState,
+                    hasContent: !!document.querySelector('#main-outlet'),
+                    url: window.location.href
+                }
+            }""")
+            
+            logging.info(f"页面状态: {is_loaded}")
+            
+            if not is_loaded.get('hasContent'):
+                logging.warning("页面可能未完全加载，尝试刷新...")
+                self.page.reload(timeout=30000, wait_until="domcontentloaded")
+            
+        except Exception as e:
+            logging.error(f"初始化过程中出错: {str(e)}")
+            self.cleanup()
+            raise
+        
         logging.info("初始化完成。")
+
+    def cleanup(self):
+        """清理资源的方法"""
+        try:
+            if hasattr(self, 'page'):
+                self.page.close()
+            if hasattr(self, 'context'):
+                self.context.close()
+            if hasattr(self, 'browser'):
+                self.browser.close()
+            if hasattr(self, 'pw'):
+                self.pw.stop()
+        except Exception as e:
+            logging.error(f"清理资源时发生错误: {e}")
 
     def load_messages(self, filename):
         """从指定的文件加载消息并返回消息列表。"""
